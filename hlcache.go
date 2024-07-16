@@ -20,6 +20,7 @@ type Group struct {
 	getter    Getter
 	name      string
 	mainCache cache
+	peers PeerPicker
 }
 
 var (
@@ -58,9 +59,9 @@ func (g *Group) populateCache(key string, value ByteView){
 	g.mainCache.add(key, value)
 }
 
-func (g *Group) load(key string) (ByteView, error) {
-	return g.getLocally(key)
-}
+// func (g *Group) load(key string) (ByteView, error) {
+// 	return g.getLocally(key)
+// }
 
 func (g *Group) getLocally(key string) (ByteView, error) {
 	bytes, err := g.getter.Get(key)
@@ -70,6 +71,33 @@ func (g *Group) getLocally(key string) (ByteView, error) {
 	value := ByteView{b : cloneBytes(bytes)}
 	g.populateCache(key, value)
 	return value, nil
+}
+
+func (g *Group) RegisterPeers(peers PeerPicker){
+	if g.peers != nil {
+		panic("RegisterPeerPicker called more than once")
+	}
+	g.peers = peers
+}
+
+func (g *Group) load(key string) (value ByteView, err error){
+	if g.peers != nil {
+		if peer, ok := g.peers.PeerPicker(key); ok {
+			if value, err = g.getFromPeer(peer, key); err == nil{
+				return value, err
+			}
+			log.Println("[HLCache] Failed to get from peer", err)
+		}
+	}
+	return g.getLocally(key)
+}
+
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error){
+	bytes, err := peer.Get(g.name, key)
+	if err != nil{
+		return ByteView{}, err
+	}
+	return ByteView{b:bytes}, nil
 }
 
 
