@@ -2,6 +2,7 @@ package hlcache
 
 import (
 	"fmt"
+	"hlcahce/singleflight"
 	"log"
 	"sync"
 )
@@ -21,6 +22,7 @@ type Group struct {
 	name      string
 	mainCache cache
 	peers PeerPicker
+	loader *singleflight.Group
 }
 
 var (
@@ -32,7 +34,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	if getter == nil {
 		panic("nil Getter")
 	}
-	group := &Group{getter: getter, name: name, mainCache: cache{cacheBytes: cacheBytes}}
+	group := &Group{getter: getter, name: name, mainCache: cache{cacheBytes: cacheBytes}, loader: &singleflight.Group{}}
 	groups[name] = group
 	return group
 }
@@ -80,16 +82,26 @@ func (g *Group) RegisterPeers(peers PeerPicker){
 	g.peers = peers
 }
 
-func (g *Group) load(key string) (value ByteView, err error){
-	if g.peers != nil {
-		if peer, ok := g.peers.PeerPicker(key); ok {
-			if value, err = g.getFromPeer(peer, key); err == nil{
-				return value, err
+func (g *Group) load(key string) (value ByteView, err error) {
+	// each key is only fetched once (either locally or remotely)
+	// regardless of the number of concurrent callers.
+	viewi, err := g.loader.Do(key, func() (interface{}, error) {
+		if g.peers != nil {
+			if peer, ok := g.peers.PeerPicker(key); ok {
+				if value, err = g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[HLCache] Failed to get from peer", err)
 			}
-			log.Println("[HLCache] Failed to get from peer", err)
 		}
+
+		return g.getLocally(key)
+	})
+
+	if err == nil {
+		return viewi.(ByteView), nil
 	}
-	return g.getLocally(key)
+	return
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error){
