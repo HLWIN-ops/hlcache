@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package hlcachepb;
 
-message Request {
+message Request { 
     string group = 1;
     string key = 2;
 }
